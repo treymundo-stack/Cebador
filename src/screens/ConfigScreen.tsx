@@ -23,7 +23,8 @@ const PARAM_LABELS: Record<string, { label: string; suffix: string; desc: string
   dias_grabado: { label: 'Días de grabado', suffix: ' días', desc: 'Tiempo que tarda un grabado.' },
   dias_envio: { label: 'Días de envío', suffix: ' días', desc: 'Tiempo de envío del proveedor.' },
   dias_venta_previa: { label: 'Días de venta antes de la fecha', suffix: ' días', desc: 'La reposición tiene que llegar esta cantidad de días antes de la fecha comercial.' },
-  tope_arriesgada: { label: 'Tope compra arriesgada', suffix: '%', desc: 'Porcentaje máximo del presupuesto para productos en alza sin historial.' },
+  tope_por_producto: { label: 'Tope por producto', suffix: '%', desc: 'Ningún producto puede llevarse más de este porcentaje del presupuesto de una compra.' },
+  tope_arriesgada: { label: 'Tope compra arriesgada', suffix: '%', desc: 'En la compra arriesgada, máximo del presupuesto para apuestas a productos en alza (el mínimo es 15%).' },
   alerta_aumento: { label: 'Alerta de aumento', suffix: '%', desc: 'A partir de este porcentaje se alerta un aumento de costo.' },
 };
 
@@ -35,6 +36,7 @@ const PARAM_DEFAULTS: Record<string, number> = {
   dias_grabado: UMBRALES_DEFAULT.diasGrabado,
   dias_envio: UMBRALES_DEFAULT.diasEnvio,
   dias_venta_previa: UMBRALES_DEFAULT.diasVentaPrevia,
+  tope_por_producto: UMBRALES_DEFAULT.topePorProducto,
   tope_arriesgada: UMBRALES_DEFAULT.topeArriesgada,
   alerta_aumento: UMBRALES_DEFAULT.alertaAumento,
 };

@@ -8,10 +8,10 @@ import {
 } from '@/lib/data';
 import { calcCartTotals, getNextFechaComercial, paramMap, type CartItem } from '@/lib/calculations';
 import {
-  clasificarTodo, recomendarCompra, umbralesDesde, hoyIso, CLASIFICACION_LABEL,
+  clasificarTodo, recomendarCompra, umbralesDesde, hoyIso, CLASIFICACION_LABEL, PISO_ARRIESGADA,
   type Clasificacion, type CompraRecomendada, type StockClasificado,
 } from '@/lib/reglas';
-import { formatARS, formatDateShort } from '@/lib/format';
+import { formatARS, formatDateShort, formatNumber } from '@/lib/format';
 import type { Compra, FechaComercial, Parametro, StockInversion, TipoCompra } from '@/types';
 import { Modal } from '@/components/ui/Modal';
 import { Alert } from '@/components/ui/Alert';
@@ -367,8 +367,8 @@ export function CompraScreen() {
           </div>
           <p className="text-xs text-mate-400 mt-1">
             {tipo === 'conservadora'
-              ? 'Solo productos con historial de ventas.'
-              : `Puede destinar hasta el ${umbrales.topeArriesgada}% del presupuesto a productos en alza con poco historial.`}
+              ? `Solo productos con historial de ventas. Ningún producto se lleva más del ${umbrales.topePorProducto}% del presupuesto.`
+              : `Destina entre el ${Math.min(PISO_ARRIESGADA, umbrales.topeArriesgada)}% y el ${umbrales.topeArriesgada}% del presupuesto a apuestas: productos en alza con poco historial. Ningún producto se lleva más del ${umbrales.topePorProducto}%.`}
           </p>
         </div>
 
@@ -391,6 +391,12 @@ export function CompraScreen() {
             />
           </div>
 
+          {presupuesto > 0 && cart.some((c) => c.cantidad * c.costo_unitario > (presupuesto * umbrales.topePorProducto) / 100) && (
+            <Alert variant="warning">
+              Pasan el tope por producto ({umbrales.topePorProducto}% = {formatARS((presupuesto * umbrales.topePorProducto) / 100)}):{' '}
+              {cart.filter((c) => c.cantidad * c.costo_unitario > (presupuesto * umbrales.topePorProducto) / 100).map((c) => c.producto_nombre).join(', ')}.
+            </Alert>
+          )}
           {totals.presupuestoRestante < 0 && (
             <Alert variant="error">
               La compra supera el presupuesto en {formatARS(Math.abs(totals.presupuestoRestante))}. Sacá productos o bajá cantidades.
@@ -400,6 +406,20 @@ export function CompraScreen() {
             <Alert variant="info" title="No entraron en el presupuesto">
               {recomendacion.sinPresupuesto.slice(0, 6).join(', ')}
               {recomendacion.sinPresupuesto.length > 6 && ` y ${recomendacion.sinPresupuesto.length - 6} más`}.
+            </Alert>
+          )}
+          {recomendacion && recomendacion.tipo === 'arriesgada' && recomendacion.inversionApuestas > 0 && (
+            <p className="text-xs text-warning-600">
+              En apuestas: {formatARS(recomendacion.inversionApuestas)} ({formatNumber((recomendacion.inversionApuestas / recomendacion.presupuesto) * 100, 1)}% del presupuesto).
+            </p>
+          )}
+          {recomendacion && recomendacion.avisos.map((a) => (
+            <Alert key={a} variant="info">{a}</Alert>
+          ))}
+          {recomendacion && recomendacion.superanTope.length > 0 && (
+            <Alert variant="info" title={`Superan el tope por producto (${umbrales.topePorProducto}% = ${formatARS((recomendacion.presupuesto * umbrales.topePorProducto) / 100)})`}>
+              El mínimo de compra ya cuesta más que el tope: {recomendacion.superanTope.slice(0, 6).join(', ')}
+              {recomendacion.superanTope.length > 6 && ` y ${recomendacion.superanTope.length - 6} más`}.
             </Alert>
           )}
           {Object.keys(porProveedor).length > 1 && (

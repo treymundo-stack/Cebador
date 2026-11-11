@@ -126,7 +126,8 @@ Deno.serve(async (req) => {
         system:
           'Redactás, para la dueña de un emprendimiento de mates, UNA línea corta (máximo 25 palabras) que explique ' +
           'por qué conviene comprar cada producto. Hablá en español rioplatense, de "vos". ' +
-          'Usá solo los datos que te pasan: no cambies cantidades, márgenes ni montos, y no agregues cifras nuevas.',
+          'Usá solo los datos que te pasan: no cambies cantidades, márgenes ni montos, y no agregues cifras nuevas. ' +
+          'Formato argentino: montos con signo $ y punto de miles ($ 75.000) y decimales con coma (4,5 días; 36,1%).',
         messages: [
           {
             role: 'user',

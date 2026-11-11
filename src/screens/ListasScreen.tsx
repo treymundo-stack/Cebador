@@ -8,7 +8,8 @@ import {
   createItemLista, createItemsLista, updateItemLista, deleteItemLista,
   fetchProveedores, fetchProductos, fetchParametros, uploadListaArchivo, leerListaConIA,
 } from '@/lib/data';
-import { compararCostos, detectarAumentos, paramMap } from '@/lib/calculations';
+import { compararCostos, detectarAumentos, listasVigentes, paramMap } from '@/lib/calculations';
+import { asociarProducto as asociarPorNombre, leerTextoLista } from '@/lib/lectura';
 import { hoyIso, margen as calcMargen, umbralesDesde } from '@/lib/reglas';
 import { useAuth } from '@/context/AuthContext';
 import { formatARS, formatDate } from '@/lib/format';
@@ -118,8 +119,21 @@ export function ListasScreen() {
       });
 
       if (modalMode !== 'nueva') {
+        const catalogo = productos.filter((p) => p.activo).map((p) => ({ id: p.id, nombre: p.nombre }));
+        const anterior = listasVigentes(listas).find((l) => l.proveedor_id === listaForm.proveedor_id);
+        const minimosPrevios = Object.fromEntries(
+          (anterior?.items_lista ?? []).filter((i) => i.producto_id).map((i) => [i.producto_id!, i.minimo_compra]),
+        );
         try {
-          const renglones = await leerListaConIA(archivoPath ? { archivo_path: archivoPath } : { texto: textoPegado });
+          const leidos = await leerListaConIA(archivoPath ? { archivo_path: archivoPath } : { texto: textoPegado });
+          // Lo que la IA no asoció se intenta asociar por nombre; si sigue sin producto, queda para revisar.
+          const renglones = leidos.map((r) => {
+            if (r.producto_id) return r;
+            const a = asociarPorNombre(r.descripcion_original, catalogo);
+            return a.producto_id
+              ? { ...r, producto_id: a.producto_id }
+              : { ...r, dudoso: true, motivo_duda: r.motivo_duda ?? a.motivo };
+          });
           await createItemsLista(renglones.map((r) => ({ lista_id: nueva.id, ...r })));
           const dudosos = renglones.filter((r) => r.dudoso).length;
           const sinAsociar = renglones.filter((r) => !r.producto_id).length;
@@ -132,22 +146,15 @@ export function ListasScreen() {
         } catch (err) {
           const motivo = err instanceof Error ? err.message : 'error desconocido';
           if (modalMode === 'texto') {
-            // Sin IA: un renglón por línea con el formato "descripción, costo, mínimo".
-            const renglones = textoPegado
-              .split('\n')
-              .map((l) => l.split(',').map((x) => x.trim()))
-              .filter((parts) => parts[0])
-              .map((parts) => ({
-                lista_id: nueva.id,
-                descripcion_original: parts[0],
-                producto_id: null,
-                costo: parseFloat(parts[1]) || 0,
-                minimo_compra: parseInt(parts[2]) || 1,
-                dudoso: true,
-                motivo_duda: 'Cargado sin IA',
-              }));
-            await createItemsLista(renglones);
-            setAvisoIA(`No se pudo usar la IA (${motivo}). Se cargaron ${renglones.length} renglón(es), uno por línea: revisalos.`);
+            // Sin IA: se leen las líneas con precio y se asocian por nombre (src/lib/lectura.ts).
+            const renglones = leerTextoLista(textoPegado, catalogo, minimosPrevios);
+            await createItemsLista(renglones.map((r) => ({ lista_id: nueva.id, ...r })));
+            const sinAsociar = renglones.filter((r) => !r.producto_id).length;
+            setAvisoIA(
+              `Se leyó sin IA (${motivo}): ${renglones.length} renglón(es)` +
+                (sinAsociar ? `, ${sinAsociar} sin asociar y marcado(s) para revisar` : '') +
+                '. La lista queda en borrador: revisala antes de confirmar.',
+            );
           } else {
             setAvisoIA(`No se pudo leer el archivo con IA (${motivo}). Cargá los renglones a mano.`);
           }

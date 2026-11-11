@@ -1,24 +1,33 @@
+/**
+ * Formato argentino hecho a mano (no con Intl): algunos navegadores no ponen el
+ * punto de miles en números de 4 cifras con 'es-AR'. Punto de miles, coma decimal.
+ */
+export function decimal(value: number, maxDecimales = 0, minDecimales = 0): string {
+  if (!isFinite(value)) return '—';
+  const factor = 10 ** maxDecimales;
+  const redondeado = Math.round(Math.abs(value) * factor) / factor;
+  let [entero, dec = ''] = redondeado.toFixed(maxDecimales).split('.');
+  dec = dec.replace(/0+$/, '');
+  while (dec.length < minDecimales) dec += '0';
+  entero = entero.replace(/\B(?=(\d{3})+(?!\d))/g, '.');
+  const signo = value < 0 && redondeado !== 0 ? '-' : '';
+  return signo + entero + (dec ? ',' + dec : '');
+}
+
 export function formatARS(value: number | null | undefined): string {
-  if (value === null || value === undefined) return '—';
-  return new Intl.NumberFormat('es-AR', {
-    style: 'currency',
-    currency: 'ARS',
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
-  }).format(value);
+  if (value === null || value === undefined || isNaN(Number(value))) return '—';
+  const n = Math.round(Number(value));
+  return `${n < 0 ? '-' : ''}$ ${decimal(Math.abs(n))}`;
 }
 
 export function formatNumber(value: number | null | undefined, decimals = 0): string {
-  if (value === null || value === undefined) return '—';
-  return new Intl.NumberFormat('es-AR', {
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
-  }).format(value);
+  if (value === null || value === undefined || isNaN(Number(value))) return '—';
+  return decimal(Number(value), decimals);
 }
 
 export function formatPercent(value: number | null | undefined): string {
   if (value === null || value === undefined) return '—';
-  return `${value > 0 ? '+' : ''}${value.toFixed(1)}%`;
+  return `${value > 0 ? '+' : ''}${decimal(value, 1)}%`;
 }
 
 /** Interpreta 'YYYY-MM-DD' como fecha local (new Date('YYYY-MM-DD') la toma en UTC). */

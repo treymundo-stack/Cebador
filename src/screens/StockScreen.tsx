@@ -2,18 +2,19 @@ import { useEffect, useState, useCallback, useMemo } from 'react';
 import { Package, DollarSign } from 'lucide-react';
 import { fetchStockInversion, fetchParametros } from '@/lib/data';
 import { paramMap } from '@/lib/calculations';
-import { clasificarTodo, plataParada, umbralesDesde, CLASIFICACION_LABEL, type Clasificacion } from '@/lib/reglas';
+import { clasificarTodo, plataInvertida, plataParada, umbralesDesde, CLASIFICACION_LABEL, type Clasificacion } from '@/lib/reglas';
 import { formatARS, formatNumber } from '@/lib/format';
 import type { StockInversion, Parametro } from '@/types';
 import { FullSpinner, ErrorState, EmptyState } from '@/components/ui/Feedback';
 import { ClasificacionBadge } from '@/components/ui/ClasificacionBadge';
 
-const ORDEN_CLASES: Clasificacion[] = ['reforzar', 'mantener', 'revisar_precio', 'no_recomprar'];
+const ORDEN_CLASES: Clasificacion[] = ['reforzar', 'mantener', 'revisar_precio', 'no_recomprar', 'sin_costo'];
 const COLOR_CLASE: Record<Clasificacion, string> = {
   reforzar: 'text-positivo-600',
   mantener: 'text-mate-600',
   revisar_precio: 'text-warning-600',
   no_recomprar: 'text-alerta-500',
+  sin_costo: 'text-mate-400',
 };
 
 export function StockScreen() {
@@ -51,12 +52,12 @@ export function StockScreen() {
   }
 
   const parada = plataParada(stock, u);
-  const totalInvertido = stock.reduce((sum, s) => sum + Number(s.plata_invertida), 0);
+  const totalInvertido = plataInvertida(stock);
   const conteo = ORDEN_CLASES.map((c) => ({
     c,
     n: clasificado.filter((s) => s.clasificacion === c).length,
-    plata: clasificado.filter((s) => s.clasificacion === c).reduce((sum, s) => sum + Number(s.plata_invertida), 0),
-  }));
+    plata: plataInvertida(clasificado.filter((s) => s.clasificacion === c)),
+  })).filter(({ c, n }) => c !== 'sin_costo' || n > 0);
 
   const q = search.toLowerCase();
   const filtered = clasificado.filter(
@@ -107,7 +108,7 @@ export function StockScreen() {
       </div>
 
       {/* Productos por clasificación */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+      <div className={`grid grid-cols-2 gap-2 ${conteo.length > 4 ? 'sm:grid-cols-5' : 'sm:grid-cols-4'}`}>
         {conteo.map(({ c, n, plata }) => (
           <button
             key={c}
@@ -116,7 +117,7 @@ export function StockScreen() {
           >
             <p className={`text-xs font-medium ${COLOR_CLASE[c]}`}>{CLASIFICACION_LABEL[c]}</p>
             <p className="text-xl font-medium text-mate-700">{n}</p>
-            <p className="text-xs text-mate-400">{formatARS(plata)}</p>
+            <p className="text-xs text-mate-400">{c === 'sin_costo' ? 'no suma' : formatARS(plata)}</p>
           </button>
         ))}
       </div>
@@ -157,7 +158,7 @@ export function StockScreen() {
             <p className="mt-1.5 text-xs text-mate-600">{s.motivo}</p>
             <dl className="mt-2 grid grid-cols-3 sm:grid-cols-6 gap-x-3 gap-y-1 text-xs">
               <Dato label="Stock" valor={String(s.stock_actual)} alerta={s.stock_actual === 0} />
-              <Dato label="Costo" valor={formatARS(s.costo_vigente)} sub={s.proveedor_nombre ?? undefined} />
+              <Dato label="Costo" valor={s.costo_vigente === null ? 'sin cargar' : formatARS(s.costo_vigente)} sub={s.proveedor_nombre ?? undefined} alerta={s.costo_vigente === null} />
               <Dato
                 label="Margen"
                 valor={s.margen !== null ? `${formatNumber(s.margen, 1)}%` : '—'}
@@ -173,7 +174,7 @@ export function StockScreen() {
                 valor={s.dias_desde_ultima_venta !== null ? `hace ${s.dias_desde_ultima_venta} d` : 'nunca'}
                 alerta={s.dias_desde_ultima_venta !== null && s.dias_desde_ultima_venta > u.diasSinVentaNoRecomprar}
               />
-              <Dato label="Invertido" valor={formatARS(s.plata_invertida)} />
+              <Dato label="Invertido" valor={s.costo_vigente === null ? '—' : formatARS(s.plata_invertida)} />
             </dl>
           </div>
         ))}

@@ -5,7 +5,9 @@ import { describe, expect, it } from 'vitest';
 import type { ListaPrecios, StockInversion } from '@/types';
 import {
   UMBRALES_DEFAULT as U,
+  CLASIFICACION_LABEL,
   clasificar,
+  plataInvertida,
   clasificarTodo,
   fechaLimiteGrabados,
   fechaLimiteReposicion,
@@ -71,6 +73,33 @@ describe('R3 · clasificación', () => {
   });
   it('lo demás → Mantener', () => {
     expect(clasificar(prod({ costo_vigente: 6500, rotacion_dias: 40 }), U).clasificacion).toBe('mantener');
+  });
+  it('en baja nunca es Reforzar: como máximo Mantener', () => {
+    const p = prod({ costo_vigente: 5000, rotacion_dias: 3, tendencia: 'en_baja' });
+    expect(p.margen).toBe(50);
+    const r = clasificar(p, U);
+    expect(r.clasificacion).toBe('mantener');
+    expect(r.motivo).toMatch(/en baja/);
+  });
+  it('en baja igual puede ser No recomprar o Revisar precio', () => {
+    expect(clasificar(prod({ tendencia: 'en_baja', dias_desde_ultima_venta: 80 }), U).clasificacion).toBe('no_recomprar');
+    expect(clasificar(prod({ tendencia: 'en_baja', costo_vigente: 8000 }), U).clasificacion).toBe('revisar_precio');
+  });
+  it('sin costo vigente → "Sin costo cargado", aunque esté en alza o sin ventas', () => {
+    for (const over of [{}, { tendencia: 'en_alza' as const }, { dias_desde_ultima_venta: 90 }]) {
+      const p = prod({ costo_vigente: null, margen: null, proveedor_id: null, plata_invertida: 0, ...over });
+      const r = clasificar(p, U);
+      expect(r.clasificacion).toBe('sin_costo');
+      expect(CLASIFICACION_LABEL[r.clasificacion]).toBe('Sin costo cargado');
+    }
+  });
+  it('sin costo cargado no suma a la plata invertida ni a la parada', () => {
+    const stock = [
+      prod({ stock_actual: 2, costo_vigente: 1000 }),
+      prod({ stock_actual: 5, costo_vigente: null, margen: null, dias_desde_ultima_venta: 80 }),
+    ];
+    expect(plataInvertida(stock)).toBe(2000);
+    expect(plataParada(stock, U)).toBe(0);
   });
   it('los umbrales salen de la tabla de parámetros', () => {
     const u = umbralesDesde({ margen_minimo: 50 });
@@ -191,8 +220,114 @@ describe('R8 / R9 · compra recomendada', () => {
     expect(camionero.cantidad).toBe(9);
   });
 
+  describe('R8 · tope por producto', () => {
+    it('el tope sale de parametros (tope_por_producto, 25 por defecto)', () => {
+      expect(U.topePorProducto).toBe(25);
+      expect(umbralesDesde({ tope_por_producto: 40 }).topePorProducto).toBe(40);
+    });
+
+    for (const tipo of ['conservadora', 'arriesgada'] as const) {
+      it(`${tipo}: con $300.000, ningún renglón supera $75.000`, () => {
+        const c = recomendarCompra(stock, { ...opts, tipo }, U);
+        expect(c.items.length).toBeGreaterThan(0);
+        for (const i of c.items) expect(i.cantidad * i.costo_unitario).toBeLessThanOrEqual(75000);
+      });
+    }
+
+    it('el producto que llega al tope se recorta y lo dice', () => {
+      const c = recomendarCompra(stock, { ...opts, tipo: 'conservadora' }, U);
+      const camionero = c.items.find((i) => i.producto_nombre === 'Camionero')!;
+      // quería 9 u. × $19.000 = $171.000; el tope es $75.000 → 3 u.
+      expect(camionero.cantidad).toBe(3);
+      expect(camionero.explicacion).toContain('Recortado a 3 u. por tope por producto');
+    });
+
+    it('lo que no se lleva el recortado pasa a los siguientes de la lista', () => {
+      const s = clasificarTodo(
+        [
+          prod({ nombre: 'Caro y rápido', precio_venta: 20000, costo_vigente: 10000, unidades_90d: 60, ventas_90d: 60, rotacion_dias: 1.5, stock_actual: 0 }),
+          prod({ nombre: 'Barato y lento', precio_venta: 2000, costo_vigente: 1100, unidades_90d: 30, ventas_90d: 30, rotacion_dias: 3, stock_actual: 0 }),
+        ],
+        U,
+      );
+      const sinTope = recomendarCompra(s, { ...opts, presupuesto: 100000, tipo: 'conservadora' }, { ...U, topePorProducto: 100 });
+      expect(sinTope.items.map((i) => i.producto_nombre)).toEqual(['Caro y rápido']);
+      const conTope = recomendarCompra(s, { ...opts, presupuesto: 100000, tipo: 'conservadora' }, U);
+      expect(conTope.items.map((i) => i.producto_nombre)).toEqual(['Caro y rápido', 'Barato y lento']);
+      expect(conTope.items[0].cantidad).toBe(2);
+      expect(conTope.items[0].explicacion).toContain('Recortado a 2 u. por tope por producto');
+      expect(conTope.items[1].cantidad).toBe(10);
+    });
+
+    it('si el mínimo de compra ya supera el tope, el producto queda afuera y se avisa', () => {
+      const s = clasificarTodo([prod({ nombre: 'Kit', precio_venta: 200000, costo_vigente: 100000, minimo_compra: 1 })], U);
+      const c = recomendarCompra(s, { ...opts, tipo: 'conservadora' }, U);
+      expect(c.items).toHaveLength(0);
+      expect(c.superanTope).toEqual(['Kit']);
+    });
+  });
+
+  describe('R9 · conservadora vs arriesgada', () => {
+    const apostado = (c: ReturnType<typeof recomendarCompra>) =>
+      c.items.filter((i) => i.apuesta).reduce((s, i) => s + i.cantidad * i.costo_unitario, 0);
+    const porNombre = new Map(stock.map((s) => [s.nombre, s]));
+
+    it('conservadora: nunca incluye productos sin historial de ventas, con ningún presupuesto', () => {
+      for (const presupuesto of [50000, 300000, 10_000_000]) {
+        const c = recomendarCompra(stock, { ...opts, presupuesto, tipo: 'conservadora' }, U);
+        for (const i of c.items) expect(porNombre.get(i.producto_nombre)!.ventas_90d).toBeGreaterThan(0);
+        expect(apostado(c)).toBe(0);
+      }
+    });
+
+    it('arriesgada: destina entre el 15% y el 30% a apuestas en alza', () => {
+      for (const presupuesto of [300000, 500000, 1_000_000]) {
+        const c = recomendarCompra(stock, { ...opts, presupuesto, tipo: 'arriesgada' }, U);
+        expect(apostado(c)).toBeGreaterThanOrEqual(presupuesto * 0.15);
+        expect(apostado(c)).toBeLessThanOrEqual(presupuesto * 0.3);
+        for (const i of c.items.filter((x) => x.apuesta)) {
+          expect(porNombre.get(i.producto_nombre)!.tendencia).toBe('en_alza');
+          expect(i.explicacion).toMatch(/^Apuesta/);
+        }
+      }
+    });
+
+    it('arriesgada: si las apuestas no llegan al 15%, suma unidades hasta llegar', () => {
+      // Solo el termo es apuesta: 1 u. = $19.000 (6%) → sube a 3 u. = $57.000 (19%)
+      const soloTermo = stock.filter((s) => s.nombre !== 'Mate nuevo');
+      const c = recomendarCompra(soloTermo, { ...opts, tipo: 'arriesgada' }, U);
+      const termo = c.items.find((i) => i.producto_nombre === 'Termo nuevo')!;
+      expect(termo.cantidad).toBe(3);
+      expect(termo.explicacion).toContain('15%');
+      expect(apostado(c)).toBeGreaterThanOrEqual(45000);
+    });
+
+    it('arriesgada: respeta el tope_arriesgada de parametros', () => {
+      const u = umbralesDesde({ tope_arriesgada: 20 });
+      const c = recomendarCompra(stock, { ...opts, tipo: 'arriesgada' }, u);
+      expect(apostado(c)).toBeGreaterThanOrEqual(45000);
+      expect(apostado(c)).toBeLessThanOrEqual(60000);
+    });
+
+    it('las dos compras son distintas de verdad', () => {
+      const cons = recomendarCompra(stock, { ...opts, tipo: 'conservadora' }, U);
+      const arr = recomendarCompra(stock, { ...opts, tipo: 'arriesgada' }, U);
+      expect(arr.items.some((i) => i.apuesta)).toBe(true);
+      expect(arr.items.map((i) => `${i.producto_nombre}×${i.cantidad}`)).not.toEqual(
+        cons.items.map((i) => `${i.producto_nombre}×${i.cantidad}`),
+      );
+    });
+
+    it('arriesgada sin productos en alza: avisa que no hay apuestas', () => {
+      const sinAlza = stock.filter((s) => s.tendencia !== 'en_alza');
+      const c = recomendarCompra(sinAlza, { ...opts, tipo: 'arriesgada' }, U);
+      expect(apostado(c)).toBe(0);
+      expect(c.avisos.join(' ')).toMatch(/15%/);
+    });
+  });
+
   it('prioriza por margen × velocidad cuando no alcanza la plata', () => {
-    const c = recomendarCompra(stock, { ...opts, presupuesto: 60000, tipo: 'conservadora' }, U);
+    const c = recomendarCompra(stock, { ...opts, presupuesto: 60000, tipo: 'conservadora' }, { ...U, topePorProducto: 100 });
     expect(c.items[0].producto_nombre).toBe('Camionero');
   });
 });

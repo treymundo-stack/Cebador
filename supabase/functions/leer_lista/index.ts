@@ -158,8 +158,9 @@ Deno.serve(async (req) => {
           costo: Math.round(r.costo * 100) / 100,
           minimo_compra: Math.max(1, Math.round(r.minimo_compra || 1)),
           producto_id: idValido,
-          dudoso: r.dudoso || perdioId,
-          motivo_duda: perdioId ? 'Asociación no válida' : r.motivo_duda,
+          // Un renglón sin producto asociado siempre queda marcado para revisar.
+          dudoso: r.dudoso || perdioId || !idValido,
+          motivo_duda: perdioId ? 'Asociación no válida' : !idValido ? (r.motivo_duda ?? 'Sin producto asociado') : r.motivo_duda,
         };
       });
 

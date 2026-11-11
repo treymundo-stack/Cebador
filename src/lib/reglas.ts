@@ -5,6 +5,7 @@
  * funciones puras y verificables (ver reglas.test.ts). La IA nunca calcula.
  */
 import type { StockInversion, TipoCompra } from '@/types';
+import { decimal } from '@/lib/format';
 
 // ---------------------------------------------------------------------------
 // Parámetros (tabla `parametros`)
@@ -15,6 +16,7 @@ export interface Umbrales {
   rotacionReforzarDias: number; // ... y rotación <= rotacionReforzarDias
   diasSinVentaNoRecomprar: number; // R3/R4
   topeArriesgada: number; // R9: % máximo del presupuesto a apuestas
+  topePorProducto: number; // R8: % máximo del presupuesto para un solo producto
   alertaAumento: number; // R6: % mínimo para alertar
   diasGrabado: number; // R7
   diasEnvio: number; // R7
@@ -27,6 +29,7 @@ export const UMBRALES_DEFAULT: Umbrales = {
   rotacionReforzarDias: 15,
   diasSinVentaNoRecomprar: 60,
   topeArriesgada: 30,
+  topePorProducto: 25,
   alertaAumento: 5,
   diasGrabado: 12,
   diasEnvio: 3,
@@ -42,6 +45,7 @@ export function umbralesDesde(pm: Record<string, number>): Umbrales {
     rotacionReforzarDias: v('rotacion_reforzar_dias', d.rotacionReforzarDias),
     diasSinVentaNoRecomprar: v('dias_sin_venta_no_recomprar', d.diasSinVentaNoRecomprar),
     topeArriesgada: v('tope_arriesgada', d.topeArriesgada),
+    topePorProducto: v('tope_por_producto', d.topePorProducto),
     alertaAumento: v('alerta_aumento', d.alertaAumento),
     diasGrabado: v('dias_grabado', d.diasGrabado),
     diasEnvio: v('dias_envio', d.diasEnvio),
@@ -60,13 +64,14 @@ export function margen(precioVenta: number, costo: number | null | undefined): n
 // ---------------------------------------------------------------------------
 // R3 · Clasificación
 // ---------------------------------------------------------------------------
-export type Clasificacion = 'no_recomprar' | 'revisar_precio' | 'reforzar' | 'mantener';
+export type Clasificacion = 'no_recomprar' | 'revisar_precio' | 'reforzar' | 'mantener' | 'sin_costo';
 
 export const CLASIFICACION_LABEL: Record<Clasificacion, string> = {
   reforzar: 'Reforzar',
   mantener: 'Mantener',
   revisar_precio: 'Revisar precio',
   no_recomprar: 'No recomprar',
+  sin_costo: 'Sin costo cargado',
 };
 
 export interface ResultadoClasificacion {
@@ -74,9 +79,16 @@ export interface ResultadoClasificacion {
   motivo: string;
 }
 
-const pct = (n: number) => `${Math.round(n * 10) / 10}%`.replace('.', ',');
+const pct = (n: number) => `${decimal(n, 1)}%`;
 
 export function clasificar(s: StockInversion, u: Umbrales): ResultadoClasificacion {
+  // 0. Sin costo cargado: sin costo vigente no hay margen, así que no se clasifica.
+  if (s.costo_vigente === null || s.costo_vigente === undefined) {
+    return {
+      clasificacion: 'sin_costo',
+      motivo: 'No tiene costo en ninguna lista confirmada. Cargalo para poder clasificarlo.',
+    };
+  }
   // 1. No recomprar: sin ventas en más de N días
   if (s.dias_desde_ultima_venta !== null && s.dias_desde_ultima_venta > u.diasSinVentaNoRecomprar) {
     return {
@@ -91,16 +103,17 @@ export function clasificar(s: StockInversion, u: Umbrales): ResultadoClasificaci
       motivo: `Margen de ${pct(s.margen)}, por debajo del ${u.margenMinimo}%.`,
     };
   }
-  // 3. Reforzar: buen margen y rotación rápida, o tendencia en alza
+  // 3. Reforzar: buen margen y rotación rápida, o tendencia en alza. Nunca si está en baja.
   const rinde =
     s.margen !== null &&
     s.margen >= u.margenReforzar &&
     s.rotacion_dias !== null &&
     s.rotacion_dias <= u.rotacionReforzarDias;
-  if (rinde) {
+  const enBaja = s.tendencia === 'en_baja';
+  if (rinde && !enBaja) {
     return {
       clasificacion: 'reforzar',
-      motivo: `Margen de ${pct(s.margen!)} y se vende una unidad cada ${s.rotacion_dias} días.`,
+      motivo: `Margen de ${pct(s.margen!)} y se vende una unidad cada ${decimal(s.rotacion_dias!, 1)} días.`,
     };
   }
   if (s.tendencia === 'en_alza') {
@@ -108,11 +121,12 @@ export function clasificar(s: StockInversion, u: Umbrales): ResultadoClasificaci
   }
   // 4. Mantener
   const partes: string[] = [];
-  if (s.margen === null) partes.push('sin costo en listas confirmadas');
+  if (s.margen === null) partes.push('sin margen calculable');
   else partes.push(`margen de ${pct(s.margen)}`);
   if (s.rotacion_dias === null) partes.push(s.ventas_90d === 0 ? 'sin ventas en 90 días' : 'poca rotación');
-  else partes.push(`una venta cada ${s.rotacion_dias} días`);
-  const txt = partes.join(', ');
+  else partes.push(`se vende una unidad cada ${decimal(s.rotacion_dias, 1)} días`);
+  let txt = partes.join(', ');
+  if (enBaja) txt += rinde ? '; rinde bien pero la tendencia está en baja, así que no se refuerza' : '; tendencia en baja';
   return { clasificacion: 'mantener', motivo: txt.charAt(0).toUpperCase() + txt.slice(1) + '.' };
 }
 
@@ -127,8 +141,16 @@ export function clasificarTodo(stock: StockInversion[], u: Umbrales): StockClasi
 // ---------------------------------------------------------------------------
 export function plataParada(stock: StockInversion[], u: Umbrales): number {
   return stock
+    .filter((s) => s.costo_vigente !== null && s.costo_vigente !== undefined)
     .filter((s) => s.dias_desde_ultima_venta !== null && s.dias_desde_ultima_venta > u.diasSinVentaNoRecomprar)
-    .reduce((sum, s) => sum + s.stock_actual * (s.costo_vigente ?? 0), 0);
+    .reduce((sum, s) => sum + s.stock_actual * Number(s.costo_vigente), 0);
+}
+
+/** Plata invertida = stock × costo vigente. Los productos sin costo cargado no suman. */
+export function plataInvertida(stock: StockInversion[]): number {
+  return stock
+    .filter((s) => s.costo_vigente !== null && s.costo_vigente !== undefined)
+    .reduce((sum, s) => sum + s.stock_actual * Number(s.costo_vigente), 0);
 }
 
 // ---------------------------------------------------------------------------
@@ -196,6 +218,10 @@ export interface CompraRecomendada {
   presupuestoRestante: number;
   /** Productos que convenía reponer pero no entraron en el presupuesto. */
   sinPresupuesto: string[];
+  /** Productos cuyo mínimo de compra ya cuesta más que el tope por producto (R8). */
+  superanTope: string[];
+  /** Avisos para mostrar (por ejemplo, si la arriesgada no llegó al piso de apuestas). */
+  avisos: string[];
 }
 
 export interface OpcionesCompra {
@@ -209,6 +235,9 @@ export interface OpcionesCompra {
 
 /** Con menos ventas que esto en 90 días, un producto "tiene poco historial". */
 export const VENTAS_HISTORIAL_MINIMO = 3;
+
+/** R9: la compra arriesgada destina al menos este % del presupuesto a apuestas (y como mucho tope_arriesgada). */
+export const PISO_ARRIESGADA = 15;
 
 interface Candidato {
   s: StockClasificado;
@@ -240,8 +269,7 @@ export function recomendarCompra(stock: StockClasificado[], opts: OpcionesCompra
     const pocoHistorial = s.ventas_90d < VENTAS_HISTORIAL_MINIMO;
 
     if (opts.tipo === 'arriesgada' && s.tendencia === 'en_alza' && pocoHistorial) {
-      // R9: apuesta a tendencia. Se compra el mínimo (o lo que pida la demanda) si queda poco stock.
-      if (s.stock_actual > 1) continue;
+      // R9: apuesta a tendencia. Se arranca por el mínimo (o lo que pida la demanda).
       const cantidad = Math.max(minimo, demanda - s.stock_actual, 1);
       candidatos.push({ s, cantidadIdeal: cantidad, demanda, apuesta: true, prioridad: s.margen });
       continue;
@@ -259,29 +287,78 @@ export function recomendarCompra(stock: StockClasificado[], opts: OpcionesCompra
 
   const items: ItemRecomendado[] = [];
   const sinPresupuesto: string[] = [];
+  const superanTope: string[] = [];
   let restante = presupuesto;
   let inversionApuestas = 0;
   const topeApuestas = opts.tipo === 'arriesgada' ? (presupuesto * u.topeArriesgada) / 100 : 0;
+  // R8: ningún producto se lleva más de este monto.
+  const topeProducto = (presupuesto * u.topePorProducto) / 100;
 
-  const agregar = (c: Candidato, disponible: number): number => {
+  const agregar = (c: Candidato, disponible: number, motivoLimite = 'presupuesto'): number => {
     const costo = c.s.costo_vigente!;
     const minimo = Math.max(1, c.s.minimo_compra ?? 1);
-    const alcanza = Math.floor(disponible / costo);
-    if (alcanza < minimo) {
+    const porTope = Math.floor(topeProducto / costo);
+    if (porTope < minimo) {
+      superanTope.push(c.s.nombre);
+      return 0;
+    }
+    const porPlata = Math.floor(disponible / costo);
+    if (porPlata < minimo) {
       sinPresupuesto.push(c.s.nombre);
       return 0;
     }
-    const cantidad = Math.min(c.cantidadIdeal, alcanza);
-    items.push(armarItem(c, cantidad, diasHorizonte, opts.fechaObjetivo ?? null));
+    const cantidad = Math.min(c.cantidadIdeal, porTope, porPlata);
+    const recorte = cantidad < c.cantidadIdeal ? (porTope <= porPlata ? 'tope por producto' : motivoLimite) : null;
+    items.push(armarItem(c, cantidad, recorte, diasHorizonte, opts.fechaObjetivo ?? null));
     return cantidad * costo;
   };
 
   // Primero las apuestas (hasta el tope), después el resto por prioridad.
   const apuestas = candidatos.filter((c) => c.apuesta).sort((a, b) => b.prioridad - a.prioridad);
   for (const c of apuestas) {
-    const gasto = agregar(c, Math.min(restante, topeApuestas - inversionApuestas));
+    const gasto = agregar(c, Math.min(restante, topeApuestas - inversionApuestas), 'tope de apuestas');
     inversionApuestas += gasto;
     restante -= gasto;
+  }
+
+  // R9: si las apuestas no llegan al piso, se suman unidades repartiendo entre las
+  // apuestas (siempre la que menos lleva), sin pasar el tope de apuestas ni el tope por producto.
+  const avisos: string[] = [];
+  if (opts.tipo === 'arriesgada') {
+    const piso = (presupuesto * Math.min(PISO_ARRIESGADA, u.topeArriesgada)) / 100;
+    const sumados = new Set<string>();
+    while (inversionApuestas < piso) {
+      const opciones = apuestas
+        .map((c) => {
+          const item = items.find((i) => i.producto_id === c.s.id);
+          const costo = c.s.costo_vigente!;
+          const paso = item ? 1 : Math.max(1, c.s.minimo_compra ?? 1);
+          const llevaria = ((item?.cantidad ?? 0) + paso) * costo;
+          const ok = llevaria <= topeProducto && paso * costo <= restante && inversionApuestas + paso * costo <= topeApuestas;
+          return { c, item, paso, costo, lleva: (item?.cantidad ?? 0) * costo, ok };
+        })
+        .filter((o) => o.ok)
+        .sort((a, b) => a.lleva - b.lleva || b.c.prioridad - a.c.prioridad);
+      const o = opciones[0];
+      if (!o) break;
+      if (o.item) o.item.cantidad += o.paso;
+      else items.push(armarItem(o.c, o.paso, null, diasHorizonte, opts.fechaObjetivo ?? null));
+      sumados.add(o.c.s.id);
+      inversionApuestas += o.paso * o.costo;
+      restante -= o.paso * o.costo;
+    }
+    for (const i of items) {
+      if (!sumados.has(i.producto_id)) continue;
+      i.explicacion = i.explicacion.replace(/ Recortado a \d+ u\. por [^.]+\./, '');
+      i.explicacion += ` Subido a ${i.cantidad} u. para llegar al ${PISO_ARRIESGADA}% en apuestas.`;
+    }
+    if (inversionApuestas < piso) {
+      avisos.push(
+        apuestas.length === 0
+          ? `No hay productos en alza con poco historial y costo cargado, así que esta compra no tiene apuestas (lo pedido es entre ${PISO_ARRIESGADA}% y ${u.topeArriesgada}%).`
+          : `Las apuestas llegan solo al ${decimal((inversionApuestas / presupuesto) * 100, 1)}% del presupuesto: no alcanzan el ${PISO_ARRIESGADA}% sin pasar los topes.`,
+      );
+    }
   }
 
   const base = candidatos.filter((c) => !c.apuesta).sort((a, b) => b.prioridad - a.prioridad);
@@ -303,10 +380,18 @@ export function recomendarCompra(stock: StockClasificado[], opts: OpcionesCompra
     ganancia: ventaEsperada - inversion,
     presupuestoRestante: presupuesto - inversion,
     sinPresupuesto,
+    superanTope,
+    avisos,
   };
 }
 
-function armarItem(c: Candidato, cantidad: number, dias: number, fechaObjetivo: string | null): ItemRecomendado {
+function armarItem(
+  c: Candidato,
+  cantidad: number,
+  recorte: string | null,
+  dias: number,
+  fechaObjetivo: string | null,
+): ItemRecomendado {
   const s = c.s;
   const minimo = Math.max(1, s.minimo_compra ?? 1);
   const hasta = fechaObjetivo ? `hasta el ${fechaObjetivo.slice(8, 10)}/${fechaObjetivo.slice(5, 7)}` : `en ${dias} días`;
@@ -318,7 +403,7 @@ function armarItem(c: Candidato, cantidad: number, dias: number, fechaObjetivo: 
       `${CLASIFICACION_LABEL[s.clasificacion]}: margen ${pct(s.margen!)}, ` +
       `se esperan ${c.demanda} u. ${hasta} y tenés ${s.stock_actual}.`;
   }
-  if (cantidad < c.cantidadIdeal) explicacion += ` Recortado a ${cantidad} u. por presupuesto.`;
+  if (recorte) explicacion += ` Recortado a ${cantidad} u. por ${recorte}.`;
   else if (minimo > 1 && cantidad === minimo && c.cantidadIdeal === minimo) explicacion += ` Mínimo del proveedor: ${minimo} u.`;
   return {
     producto_id: s.id,

@@ -129,7 +129,7 @@ export function LoginScreen() {
 
           {mode === 'signup' && (
             <p className="mt-4 text-xs text-mate-400 text-center">
-              Al crear tu cuenta se cargan automáticamente 30 productos de prueba, 2 proveedores, listas y 90 días de ventas ficticias.
+              Después de crear tu cuenta podés cargar datos de prueba (todos ficticios) desde Configuración.
             </p>
           )}
         </div>
