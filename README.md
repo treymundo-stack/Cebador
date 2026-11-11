@@ -24,7 +24,7 @@ Scripts: `npm test` (reglas de negocio), `npm run typecheck`, `npm run lint`, `n
 
 1. **Migraciones.** Correr en orden los archivos de `supabase/migrations/` (SQL Editor del panel o `supabase db push`). La `003_reglas_y_correcciones` es nueva: corrige la vista `stock_inversion`, la función de datos de prueba y agrega las marcas de renglón dudoso.
 2. **Clave de Claude.** En el panel de Supabase → Edge Functions → Secrets, crear `ANTHROPIC_API_KEY`. Opcional: `CLAUDE_MODEL` para usar otro modelo (por defecto `claude-opus-5-5`).
-3. **Edge functions.**
+3. **Edge functions.** Cada función es un solo archivo, así que se puede subir desde el panel (Edge Functions → Deploy a new function → pegar el `index.ts`) o con la CLI:
    ```bash
    supabase functions deploy leer_lista
    supabase functions deploy interpretar_pedido
