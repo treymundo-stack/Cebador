@@ -1,14 +1,14 @@
 import { useEffect, useState, useCallback, FormEvent } from 'react';
 import {
-  Plus, Pencil, Trash2, Upload, Tag, ShoppingBag, History, FileUp,
+  Plus, Pencil, Archive, Tag, ShoppingBag, FileUp,
 } from 'lucide-react';
 import {
-  fetchProductos, createProducto, updateProducto, deleteProducto,
-  fetchVentas, createVenta, deleteVenta,
+  fetchProductos, createProducto, updateProducto,
+  fetchVentas, createVenta,
 } from '@/lib/data';
-import { formatARS, formatDateShort, formatDate } from '@/lib/format';
-import { useAuth } from '@/context/AuthContext';
-import type { Producto, Venta } from '@/types';
+import { formatARS, formatDateShort } from '@/lib/format';
+import { hoyIso } from '@/lib/reglas';
+import type { Canal, Producto, Tendencia, Venta } from '@/types';
 import { Modal } from '@/components/ui/Modal';
 import { Alert } from '@/components/ui/Alert';
 import { FullSpinner, ErrorState, EmptyState } from '@/components/ui/Feedback';
@@ -18,7 +18,6 @@ type Tab = 'catalogo' | 'ventas' | 'importar';
 const CATEGORIAS = ['Mates', 'Bombillas', 'Materas', 'Yerberas', 'Kits', 'Termos', 'Otros'];
 
 export function ProductosScreen() {
-  const { user } = useAuth();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<Tab>('catalogo');
@@ -36,11 +35,11 @@ export function ProductosScreen() {
   // Forms
   const [prodForm, setProdForm] = useState({
     nombre: '', categoria: 'Mates', precio_venta: 0, stock_actual: 0,
-    grabable: false, tendencia: 'estable' as const,
+    grabable: false, tendencia: 'estable' as Tendencia,
   });
   const [ventaForm, setVentaForm] = useState({
-    producto_id: '', fecha: new Date().toISOString().split('T')[0],
-    cantidad: 1, precio_unitario: 0, canal: 'instagram' as const,
+    producto_id: '', fecha: hoyIso(),
+    cantidad: 1, precio_unitario: 0, canal: 'instagram' as Canal,
   });
 
   const load = useCallback(async () => {
@@ -110,10 +109,11 @@ export function ProductosScreen() {
     }
   };
 
+  // Dar de baja (activo = false): no se borra, así se conserva su historial de ventas.
   const removeProd = async (id: string) => {
-    if (!confirm('¿Eliminar este producto? Se borrarán también sus ventas.')) return;
+    if (!confirm('¿Dar de baja este producto? Deja de aparecer, pero se conservan sus ventas.')) return;
     try {
-      await deleteProducto(id);
+      await updateProducto(id, { activo: false });
       await load();
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Error al eliminar');
@@ -124,7 +124,7 @@ export function ProductosScreen() {
   const openNewVenta = () => {
     setVentaForm({
       producto_id: productos[0]?.id ?? '',
-      fecha: new Date().toISOString().split('T')[0],
+      fecha: hoyIso(),
       cantidad: 1,
       precio_unitario: productos[0]?.precio_venta ?? 0,
       canal: 'instagram',
@@ -156,16 +156,6 @@ export function ProductosScreen() {
       setFormError(err instanceof Error ? err.message : 'Error al registrar la venta');
     } finally {
       setSaving(false);
-    }
-  };
-
-  const removeVenta = async (id: string) => {
-    if (!confirm('¿Eliminar esta venta?')) return;
-    try {
-      await deleteVenta(id);
-      await load();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error al eliminar');
     }
   };
 
@@ -347,8 +337,8 @@ export function ProductosScreen() {
                             <button onClick={() => openEditProd(p)} className="rounded-lg p-1.5 text-mate-400 hover:bg-crema-200 hover:text-mate-600 transition-colors">
                               <Pencil size={14} />
                             </button>
-                            <button onClick={() => removeProd(p.id)} className="rounded-lg p-1.5 text-mate-400 hover:bg-alerta-50 hover:text-alerta-500 transition-colors">
-                              <Trash2 size={14} />
+                            <button onClick={() => removeProd(p.id)} title="Dar de baja" className="rounded-lg p-1.5 text-mate-400 hover:bg-alerta-50 hover:text-alerta-500 transition-colors">
+                              <Archive size={14} />
                             </button>
                           </div>
                         </td>
@@ -382,22 +372,16 @@ export function ProductosScreen() {
                         <th className="px-3 py-2.5 text-center font-medium">Cant.</th>
                         <th className="px-3 py-2.5 text-right font-medium">Precio</th>
                         <th className="px-3 py-2.5 text-center font-medium">Canal</th>
-                        <th className="px-3 py-2.5"></th>
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-crema-200">
                       {ventas.slice(0, 50).map((v) => (
                         <tr key={v.id} className="hover:bg-crema-50/50 transition-colors">
                           <td className="px-3 py-2.5 text-mate-600">{formatDateShort(v.fecha)}</td>
-                          <td className="px-3 py-2.5 font-medium text-mate-700">{productoNombre(v.producto_id)}</td>
+                          <td className="px-3 py-2.5 font-medium text-mate-700">{v.producto?.nombre ?? productoNombre(v.producto_id)}</td>
                           <td className="px-3 py-2.5 text-center text-mate-600">{v.cantidad}</td>
                           <td className="px-3 py-2.5 text-right text-mate-600">{formatARS(v.precio_unitario)}</td>
                           <td className="px-3 py-2.5 text-center text-xs text-mate-400">{v.canal.replace('_', ' ')}</td>
-                          <td className="px-3 py-2.5 text-right">
-                            <button onClick={() => removeVenta(v.id)} className="rounded-lg p-1.5 text-mate-400 hover:bg-alerta-50 hover:text-alerta-500 transition-colors">
-                              <Trash2 size={14} />
-                            </button>
-                          </td>
                         </tr>
                       ))}
                     </tbody>

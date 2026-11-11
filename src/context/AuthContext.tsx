@@ -40,15 +40,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signUp = async (email: string, password: string) => {
     const { data, error } = await supabase.auth.signUp({ email, password });
     if (error) return { error: error.message, needsSeed: false };
-    if (data.user) {
-      const { error: seedError } = await supabase.rpc('seed_datos_ficticios');
-      if (seedError) {
-        console.error('Error al sembrar datos:', seedError.message);
-        return { error: seedError.message, needsSeed: false };
-      }
-      return { error: null, needsSeed: true };
-    }
-    return { error: 'No se pudo crear la cuenta', needsSeed: false };
+    if (!data.user) return { error: 'No se pudo crear la cuenta', needsSeed: false };
+    // Los datos de prueba se cargan a mano desde Configuración, nunca solos.
+    return { error: null, needsSeed: !data.session };
   };
 
   const signOut = async () => {

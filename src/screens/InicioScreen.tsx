@@ -1,7 +1,8 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Calendar, AlertCircle, TrendingUp, ShoppingCart, ListOrdered, Clock, Package } from 'lucide-react';
+import { Calendar, TrendingUp, ShoppingCart, ListOrdered, Clock, Package } from 'lucide-react';
 import { fetchFechasComerciales, fetchParametros, fetchStockInversion, fetchListas, fetchProveedores } from '@/lib/data';
-import { calcFechaLimiteReposicion, calcFechaLimiteGrabados, getNextFechaComercial, calcPlataParada, detectarAumentos, paramMap } from '@/lib/calculations';
+import { getNextFechaComercial, detectarAumentos, paramMap } from '@/lib/calculations';
+import { clasificarTodo, fechaLimiteGrabados, fechaLimiteReposicion, plataParada as calcPlataParada, umbralesDesde } from '@/lib/reglas';
 import { formatDate, formatARS, diasRestantes, daysUntil } from '@/lib/format';
 import type { FechaComercial, Parametro, StockInversion, ListaPrecios, Proveedor } from '@/types';
 import { FullSpinner, ErrorState, EmptyState } from '@/components/ui/Feedback';
@@ -49,28 +50,24 @@ export function InicioScreen({ onNavigate }: Props) {
   if (loading) return <FullSpinner label="Cargando resumen…" />;
   if (error) return <ErrorState message={error} onRetry={load} />;
 
-  const pm = paramMap(params);
+  const u = umbralesDesde(paramMap(params));
   const proximaFecha = getNextFechaComercial(fechas);
-  const diasEntregaProm = proveedores.length > 0
-    ? Math.round(proveedores.reduce((s, p) => s + p.dias_entrega, 0) / proveedores.length)
-    : 7;
+  // R7: se usa el proveedor activo que más tarda en entregar, para no llegar tarde con ninguno.
+  const activos = proveedores.filter((p) => p.activo);
+  const diasEntrega = activos.length > 0 ? Math.max(...activos.map((p) => p.dias_entrega)) : 7;
 
-  const fechaReposicion = proximaFecha
-    ? calcFechaLimiteReposicion(proximaFecha.fecha, diasEntregaProm)
-    : null;
-  const fechaGrabados = proximaFecha
-    ? calcFechaLimiteGrabados(proximaFecha.fecha, pm.dias_grabado ?? 12, pm.dias_envio ?? 3)
-    : null;
+  const fechaReposicion = proximaFecha ? fechaLimiteReposicion(proximaFecha.fecha, diasEntrega, u) : null;
+  const fechaGrabados = proximaFecha ? fechaLimiteGrabados(proximaFecha.fecha, u) : null;
 
   const diasParaReposicion = daysUntil(fechaReposicion);
   const diasParaGrabados = daysUntil(fechaGrabados);
 
-  const aumentos = detectarAumentos(listas, pm.alerta_aumento ?? 5);
-  const plataParada = calcPlataParada(stock, pm.dias_sin_venta_no_recomprar ?? 60);
-  const productosSinVenta = stock.filter(
-    (s) => s.dias_desde_ultima_venta !== null && s.dias_desde_ultima_venta > (pm.dias_sin_venta_no_recomprar ?? 60)
-  );
-  const productosBajoStock = stock.filter((s) => s.stock_actual <= 1);
+  const nombres = Object.fromEntries(stock.map((s) => [s.id, s.nombre]));
+  const aumentos = detectarAumentos(listas, u.alertaAumento, nombres);
+  const plataParada = calcPlataParada(stock, u);
+  const clasificado = clasificarTodo(stock, u);
+  const productosSinVenta = clasificado.filter((s) => s.clasificacion === 'no_recomprar');
+  const productosBajoStock = clasificado.filter((s) => s.clasificacion === 'reforzar' && s.stock_actual <= 1);
 
   return (
     <div className="space-y-5">
@@ -81,6 +78,13 @@ export function InicioScreen({ onNavigate }: Props) {
         </h1>
         <p className="text-sm text-mate-400 mt-0.5">Esto es lo que tenés que saber hoy.</p>
       </div>
+
+      {stock.length === 0 && (
+        <Alert variant="info" title="Todavía no hay productos">
+          Cargá tu catálogo en Productos y ventas, o probá la app con datos ficticios desde{' '}
+          <button onClick={() => onNavigate('config')} className="underline font-medium">Configuración</button>.
+        </Alert>
+      )}
 
       {/* Próxima fecha comercial */}
       {proximaFecha ? (
@@ -99,7 +103,7 @@ export function InicioScreen({ onNavigate }: Props) {
             <div className="p-4">
               <div className="flex items-center gap-1.5 text-xs text-mate-400">
                 <ShoppingCart size={12} />
-                <span>Fecha límite reposición</span>
+                <span>Límite para reponer</span>
               </div>
               <p className="mt-1 text-lg font-medium text-mate-700" style={{ fontFamily: '"Cormorant Garamond", serif' }}>
                 {formatDate(fechaReposicion)}
@@ -145,14 +149,15 @@ export function InicioScreen({ onNavigate }: Props) {
           )}
 
           {productosBajoStock.length > 0 && (
-            <Alert variant="info" title={`${productosBajoStock.length} producto${productosBajoStock.length > 1 ? 's' : ''} con stock bajo (≤1)`}>
-              Revisá si conviene reponer antes de la próxima fecha.
+            <Alert variant="info" title={`${productosBajoStock.length} producto${productosBajoStock.length > 1 ? 's' : ''} para reforzar con 1 unidad o menos`}>
+              {productosBajoStock.slice(0, 4).map((s) => s.nombre).join(', ')}
+              {productosBajoStock.length > 4 && ` y ${productosBajoStock.length - 4} más`}. Conviene reponer antes de la próxima fecha.
             </Alert>
           )}
 
           {productosSinVenta.length > 0 && (
-            <Alert variant="error" title={`${productosSinVenta.length} producto${productosSinVenta.length > 1 ? 's' : ''} sin ventas en más de ${pm.dias_sin_venta_no_recomprar ?? 60} días`}>
-              Tienen {formatARS(plataParada)} de plata parada en stock.
+            <Alert variant="error" title={`${productosSinVenta.length} producto${productosSinVenta.length > 1 ? 's' : ''} para no recomprar`}>
+              {productosSinVenta.slice(0, 4).map((s) => s.nombre).join(', ')}. Sin ventas en más de {u.diasSinVentaNoRecomprar} días: {formatARS(plataParada)} de plata parada.
             </Alert>
           )}
         </div>

@@ -62,6 +62,8 @@ export interface ItemLista {
   producto_id: string | null;
   costo: number;
   minimo_compra: number;
+  dudoso?: boolean;
+  motivo_duda?: string | null;
   created_at: string;
   producto?: Pick<Producto, 'id' | 'nombre'>;
 }
@@ -124,8 +126,11 @@ export interface StockInversion {
   costo_vigente: number | null;
   proveedor_id: string | null;
   proveedor_nombre: string | null;
+  minimo_compra: number | null;
   margen: number | null;
   rotacion_dias: number | null;
+  ventas_90d: number;
+  unidades_90d: number;
   dias_desde_ultima_venta: number | null;
   plata_invertida: number;
 }

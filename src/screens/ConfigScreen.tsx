@@ -1,11 +1,13 @@
 import { useEffect, useState, useCallback } from 'react';
-import { Truck, Calendar, SlidersHorizontal, Plus, Pencil, Trash2 } from 'lucide-react';
+import { Truck, Calendar, SlidersHorizontal, Plus, Pencil, Trash2, Power, FlaskConical } from 'lucide-react';
 import {
-  fetchProveedores, createProveedor, updateProveedor, deleteProveedor,
+  fetchProveedores, createProveedor, updateProveedor, cargarDatosDePrueba,
   fetchFechasComerciales, createFechaComercial, updateFechaComercial, deleteFechaComercial,
   fetchParametros, upsertParametro,
 } from '@/lib/data';
 import { formatDate } from '@/lib/format';
+import { paramMap } from '@/lib/calculations';
+import { UMBRALES_DEFAULT } from '@/lib/reglas';
 import type { Proveedor, FechaComercial, Parametro, Prioridad } from '@/types';
 import { Modal } from '@/components/ui/Modal';
 import { Alert } from '@/components/ui/Alert';
@@ -20,8 +22,21 @@ const PARAM_LABELS: Record<string, { label: string; suffix: string; desc: string
   dias_sin_venta_no_recomprar: { label: 'Días sin venta para no recomprar', suffix: ' días', desc: 'Productos sin ventas por más de esto no se recompran.' },
   dias_grabado: { label: 'Días de grabado', suffix: ' días', desc: 'Tiempo que tarda un grabado.' },
   dias_envio: { label: 'Días de envío', suffix: ' días', desc: 'Tiempo de envío del proveedor.' },
+  dias_venta_previa: { label: 'Días de venta antes de la fecha', suffix: ' días', desc: 'La reposición tiene que llegar esta cantidad de días antes de la fecha comercial.' },
   tope_arriesgada: { label: 'Tope compra arriesgada', suffix: '%', desc: 'Porcentaje máximo del presupuesto para productos en alza sin historial.' },
   alerta_aumento: { label: 'Alerta de aumento', suffix: '%', desc: 'A partir de este porcentaje se alerta un aumento de costo.' },
+};
+
+const PARAM_DEFAULTS: Record<string, number> = {
+  margen_minimo: UMBRALES_DEFAULT.margenMinimo,
+  margen_reforzar: UMBRALES_DEFAULT.margenReforzar,
+  rotacion_reforzar_dias: UMBRALES_DEFAULT.rotacionReforzarDias,
+  dias_sin_venta_no_recomprar: UMBRALES_DEFAULT.diasSinVentaNoRecomprar,
+  dias_grabado: UMBRALES_DEFAULT.diasGrabado,
+  dias_envio: UMBRALES_DEFAULT.diasEnvio,
+  dias_venta_previa: UMBRALES_DEFAULT.diasVentaPrevia,
+  tope_arriesgada: UMBRALES_DEFAULT.topeArriesgada,
+  alerta_aumento: UMBRALES_DEFAULT.alertaAumento,
 };
 
 export function ConfigScreen() {
@@ -106,13 +121,28 @@ export function ConfigScreen() {
     }
   };
 
-  const removeProv = async (id: string) => {
-    if (!confirm('¿Eliminar este proveedor? Se borrarán también sus listas de precios.')) return;
+  // Los proveedores no se borran (borrarían sus listas): se desactivan.
+  const toggleProv = async (p: Proveedor) => {
     try {
-      await deleteProveedor(id);
+      await updateProveedor(p.id, { activo: !p.activo });
       await load();
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Error al eliminar');
+      setError(err instanceof Error ? err.message : 'Error al actualizar');
+    }
+  };
+
+  const [seedMsg, setSeedMsg] = useState<string | null>(null);
+  const cargarPrueba = async () => {
+    if (!confirm('Se cargan 30 productos, 2 proveedores, listas y 90 días de ventas ficticias. Solo funciona si todavía no tenés productos. ¿Seguir?')) return;
+    setSaving(true);
+    try {
+      const r = await cargarDatosDePrueba();
+      setSeedMsg(r.status === 'ok' ? 'Datos de prueba cargados.' : (r.message ?? 'Ya tenés datos cargados.'));
+      await load();
+    } catch (err) {
+      setSeedMsg(err instanceof Error ? err.message : 'No se pudieron cargar los datos');
+    } finally {
+      setSaving(false);
     }
   };
 
@@ -196,6 +226,18 @@ export function ConfigScreen() {
         <p className="text-sm text-mate-400 mt-0.5">Proveedores, fechas comerciales y parámetros.</p>
       </div>
 
+      <div className="card flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+        <div className="flex items-start gap-3">
+          <FlaskConical size={18} className="mt-0.5 shrink-0 text-mate-400" />
+          <div>
+            <p className="text-sm font-medium text-mate-700">Datos de prueba</p>
+            <p className="text-xs text-mate-400">30 productos, 2 proveedores y 90 días de ventas ficticias para probar la app. Solo en una cuenta vacía.</p>
+            {seedMsg && <p className="mt-1 text-xs text-mate-600">{seedMsg}</p>}
+          </div>
+        </div>
+        <button onClick={cargarPrueba} disabled={saving} className="btn-secondary shrink-0 text-xs">Cargar datos de prueba</button>
+      </div>
+
       {/* Tabs */}
       <div className="flex gap-1 rounded-xl bg-crema-200 p-1">
         {([
@@ -238,8 +280,12 @@ export function ConfigScreen() {
                   <button onClick={() => openEditProv(p)} className="rounded-lg p-2 text-mate-400 hover:bg-crema-200 hover:text-mate-600 transition-colors">
                     <Pencil size={16} />
                   </button>
-                  <button onClick={() => removeProv(p.id)} className="rounded-lg p-2 text-mate-400 hover:bg-alerta-50 hover:text-alerta-500 transition-colors">
-                    <Trash2 size={16} />
+                  <button
+                    onClick={() => toggleProv(p)}
+                    title={p.activo ? 'Desactivar' : 'Activar'}
+                    className={`rounded-lg p-2 transition-colors ${p.activo ? 'text-positivo-500 hover:bg-crema-200' : 'text-mate-300 hover:bg-crema-200'}`}
+                  >
+                    <Power size={16} />
                   </button>
                 </div>
               </div>
@@ -285,11 +331,12 @@ export function ConfigScreen() {
       {/* Parámetros */}
       {tab === 'parametros' && (
         <div className="space-y-3">
-          {parametros.length === 0 ? (
-            <EmptyState title="Sin parámetros" />
-          ) : (
-            parametros.map((p) => {
-              const meta = PARAM_LABELS[p.clave] ?? { label: p.clave, suffix: '', desc: '' };
+          <p className="text-xs text-mate-400">Umbrales de las reglas de clasificación y plazos. Tocá un valor para cambiarlo.</p>
+          {(() => {
+            const pm = paramMap(parametros);
+            return Object.keys(PARAM_LABELS).map((clave) => ({ clave, valor: pm[clave] ?? PARAM_DEFAULTS[clave], id: clave }));
+          })().map((p) => {
+              const meta = PARAM_LABELS[p.clave];
               const editVal = paramEdits[p.clave];
               const isEditing = editVal !== undefined;
               return (
@@ -329,8 +376,7 @@ export function ConfigScreen() {
                   </div>
                 </div>
               );
-            })
-          )}
+            })}
         </div>
       )}
 

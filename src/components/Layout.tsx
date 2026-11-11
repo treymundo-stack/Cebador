@@ -17,7 +17,7 @@ const primaryNav: NavItem[] = [
 ];
 
 const secondaryNav: NavItem[] = [
-  { key: 'productos', label: 'Productos y Ventas', icon: Tag },
+  { key: 'productos', label: 'Productos', icon: Tag },
   { key: 'config', label: 'Configuración', icon: Settings },
 ];
 
@@ -48,6 +48,18 @@ export function Layout({ current, onNavigate, children, onSignOut, userEmail }: 
             </div>
 
             <div className="flex items-center gap-1">
+              {primaryNav.map((item) => (
+                <button
+                  key={item.key}
+                  onClick={() => onNavigate(item.key)}
+                  className={`hidden sm:inline-flex rounded-lg px-3 py-1.5 text-sm font-medium transition-colors ${
+                    isActive(item.key) ? 'bg-mate-500 text-crema-50' : 'text-mate-500 hover:bg-crema-200'
+                  }`}
+                >
+                  {item.label}
+                </button>
+              ))}
+              <span className="mx-1 hidden h-5 w-px bg-crema-300 sm:block" />
               {secondaryNav.map((item) => (
                 <button
                   key={item.key}
@@ -65,7 +77,7 @@ export function Layout({ current, onNavigate, children, onSignOut, userEmail }: 
               <button
                 onClick={onSignOut}
                 className="rounded-lg px-2.5 py-1.5 text-xs font-medium text-mate-400 hover:text-alerta-500 transition-colors sm:px-3 sm:text-sm"
-                title="Cerrar sesión"
+                title={userEmail ? `Cerrar sesión (${userEmail})` : 'Cerrar sesión'}
               >
                 Salir
               </button>

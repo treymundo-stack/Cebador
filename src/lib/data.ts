@@ -46,7 +46,7 @@ export async function deleteProducto(id: string): Promise<void> {
 export async function fetchVentas(): Promise<Venta[]> {
   const { data, error } = await supabase
     .from('ventas')
-    .select('*, producto:id(producto_id)')
+    .select('*, producto:productos(id, nombre, precio_venta)')
     .order('fecha', { ascending: false });
   if (error) throw error;
   return data ?? [];
@@ -343,7 +343,115 @@ export async function uploadListaArchivo(file: File, userId: string): Promise<st
     .from('listas-precios')
     .upload(fileName, file, { upsert: false });
   if (error) throw error;
-
-  const { data } = supabase.storage.from('listas-precios').getPublicUrl(fileName);
   return fileName;
+}
+
+// ============================================================
+// IA (edge functions). La IA solo lee y redacta: los números los calcula el sistema (R10).
+// ============================================================
+async function invocar<T>(fn: string, body: Record<string, unknown>): Promise<T> {
+  const { data, error } = await supabase.functions.invoke(fn, { body });
+  if (error) {
+    let msg = error.message;
+    const ctx = (error as { context?: Response }).context;
+    if (ctx && typeof ctx.json === 'function') {
+      try {
+        const j = await ctx.json();
+        if (j?.error) msg = j.error;
+      } catch {
+        /* respuesta sin JSON */
+      }
+    }
+    throw new Error(msg);
+  }
+  if (data?.error) throw new Error(data.error);
+  return data as T;
+}
+
+export interface RenglonLeido {
+  descripcion_original: string;
+  costo: number;
+  minimo_compra: number;
+  producto_id: string | null;
+  dudoso: boolean;
+  motivo_duda: string | null;
+}
+
+export async function leerListaConIA(input: { archivo_path?: string; texto?: string }): Promise<RenglonLeido[]> {
+  const r = await invocar<{ renglones: RenglonLeido[] }>('leer_lista', input);
+  return r.renglones ?? [];
+}
+
+export interface PedidoInterpretado {
+  presupuesto: number | null;
+  objetivo: string;
+  fecha_objetivo: string | null;
+  tipo: 'conservadora' | 'arriesgada' | null;
+}
+
+export async function interpretarPedido(texto: string, hoy: string): Promise<PedidoInterpretado> {
+  return invocar<PedidoInterpretado>('interpretar_pedido', { accion: 'interpretar', texto, hoy });
+}
+
+export async function explicarCompra(
+  items: {
+    producto_id: string;
+    nombre: string;
+    cantidad: number;
+    clasificacion: string;
+    margen: number;
+    stock_actual: number;
+    demanda_esperada: number;
+    apuesta: boolean;
+    explicacion: string;
+  }[],
+  objetivo: string,
+): Promise<Record<string, string>> {
+  const r = await invocar<{ explicaciones: { producto_id: string; texto: string }[] }>('interpretar_pedido', {
+    accion: 'explicar',
+    items,
+    objetivo,
+  });
+  return Object.fromEntries((r.explicaciones ?? []).map((e) => [e.producto_id, e.texto]));
+}
+
+export async function createItemsLista(
+  items: {
+    lista_id: string;
+    descripcion_original: string;
+    producto_id: string | null;
+    costo: number;
+    minimo_compra: number;
+    dudoso?: boolean;
+    motivo_duda?: string | null;
+  }[],
+): Promise<void> {
+  if (items.length === 0) return;
+  const { error } = await supabase.from('items_lista').insert(items);
+  if (error) throw error;
+}
+
+export async function createItemsCompra(
+  items: {
+    compra_id: string;
+    producto_id: string;
+    proveedor_id: string;
+    cantidad: number;
+    costo_unitario: number;
+    precio_venta: number;
+    explicacion?: string | null;
+  }[],
+): Promise<void> {
+  if (items.length === 0) return;
+  const { error } = await supabase.from('items_compra').insert(items);
+  if (error) throw error;
+}
+
+// ============================================================
+// DATOS DE PRUEBA
+// ============================================================
+export async function cargarDatosDePrueba(): Promise<{ status: string; message?: string }> {
+  const { data, error } = await supabase.rpc('seed_datos_ficticios');
+  if (error) throw error;
+  return data as { status: string; message?: string };
 }

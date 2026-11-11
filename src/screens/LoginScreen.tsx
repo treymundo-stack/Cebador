@@ -42,7 +42,7 @@ export function LoginScreen() {
         if (signUpError) {
           setError(signUpError);
         } else if (needsSeed) {
-          setInfo('Cuenta creada con datos de prueba cargados.');
+          setInfo('Cuenta creada. Revisá tu mail para confirmarla y después ingresá.');
         }
       }
     } catch {
