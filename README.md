@@ -14,11 +14,19 @@ La IA lee listas de proveedores e interpreta el pedido escrito; **los números s
 
 ```bash
 npm install
-cp .env.example .env   # completar con la URL y la anon key de Supabase
+cp .env.example .env   # ya trae los valores públicos del proyecto
 npm run dev
 ```
 
 Scripts: `npm test` (reglas de negocio), `npm run typecheck`, `npm run lint`, `npm run build`.
+
+**App publicada:** https://treymundo-stack.github.io/Cebador/ — se actualiza sola con cada push a `main` (si los tests o el build fallan, no se publica).
+
+## Cómo colaborar
+
+- **Cambios chicos (textos, colores, pantallas):** en GitHub, abrir el repo y apretar la tecla `.` para editar en el navegador. Hacer commit a `main` y en un par de minutos se ve en la app publicada.
+- **Cambios más grandes:** clonar el repo, `npm install`, `cp .env.example .env`, `npm run dev`. Se puede trabajar con Claude Code: [CLAUDE.md](CLAUDE.md) le explica el proyecto.
+- **Cambios en la base de datos:** crear una migración nueva en `supabase/migrations/` y pedirle al dueño del proyecto de Supabase que la corra.
 
 ## Poner en marcha Supabase
 
